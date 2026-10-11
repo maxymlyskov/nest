@@ -4,6 +4,7 @@ import { ServerGrpc } from '../../server/server-grpc.js';
 import { ServerKafka } from '../../server/server-kafka.js';
 import { ServerMqtt } from '../../server/server-mqtt.js';
 import { ServerNats } from '../../server/server-nats.js';
+import { ServerPlatformaticKafka } from '../../server/server-platformatic-kafka.js';
 import { ServerRedis } from '../../server/server-redis.js';
 import { ServerRMQ } from '../../server/server-rmq.js';
 import { ServerTCP } from '../../server/server-tcp.js';
@@ -52,6 +53,14 @@ describe('ServerFactory', () => {
       expect(
         ServerFactory.create({ transport: Transport.KAFKA }) instanceof
           ServerKafka,
+      ).toBe(true);
+    });
+
+    it(`should return platformatic kafka server`, () => {
+      expect(
+        ServerFactory.create({
+          transport: Transport.PLATFORMATIC_KAFKA,
+        }) instanceof ServerPlatformaticKafka,
       ).toBe(true);
     });
 

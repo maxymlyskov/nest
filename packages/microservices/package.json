@@ -39,6 +39,7 @@
     "@nestjs/common": "^12.0.0",
     "@nestjs/core": "^12.0.0",
     "@nestjs/websockets": "^12.0.0",
+    "@platformatic/kafka": "*",
     "amqp-connection-manager": "*",
     "amqplib": "*",
     "cache-manager": "*",
@@ -56,6 +57,9 @@
       "optional": true
     },
     "@nestjs/websockets": {
+      "optional": true
+    },
+    "@platformatic/kafka": {
       "optional": true
     },
     "cache-manager": {

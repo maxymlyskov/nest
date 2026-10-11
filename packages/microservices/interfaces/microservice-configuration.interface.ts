@@ -11,6 +11,13 @@ import {
   ProducerRecord,
 } from '../external/kafka.interface.js';
 import { MqttClientOptions, QoS } from '../external/mqtt-options.interface.js';
+import {
+  BaseOptions as PlatformaticKafkaClientOptions,
+  ConsumeOptions as PlatformaticKafkaConsumeOptions,
+  ConsumerOptions as PlatformaticKafkaConsumerOptions,
+  ProduceOptions as PlatformaticKafkaProduceOptions,
+  ProducerOptions as PlatformaticKafkaProducerOptions,
+} from '../external/platformatic-kafka.interface.js';
 import { IORedisOptions } from '../external/redis.interface.js';
 import {
   AmqpConnectionManagerSocketOptions,
@@ -30,6 +37,7 @@ export type MicroserviceOptions =
   | MqttOptions
   | RmqOptions
   | KafkaOptions
+  | PlatformaticKafkaOptions
   | CustomStrategy;
 
 export type TransportId = Transport | symbol;
@@ -373,6 +381,37 @@ export interface KafkaOptions {
     subscribe?: Omit<ConsumerSubscribeTopics, 'topics'>;
     producer?: ProducerConfig;
     send?: Omit<ProducerRecord, 'topic' | 'messages'>;
+    serializer?: Serializer;
+    deserializer?: Deserializer;
+    parser?: KafkaParserConfig;
+    producerOnlyMode?: boolean;
+  };
+}
+
+/**
+ * @publicApi
+ */
+export interface PlatformaticKafkaOptions {
+  transport?: Transport.PLATFORMATIC_KAFKA;
+  options?: {
+    /**
+     * Defaults to `"-server"` on server side and `"-client"` on client side.
+     */
+    postfixId?: string;
+    client?: Partial<PlatformaticKafkaClientOptions>;
+    consumer?: Omit<
+      PlatformaticKafkaConsumerOptions,
+      keyof PlatformaticKafkaClientOptions | 'groupId'
+    > & { groupId?: string };
+    /**
+     * Options passed to the consumer's `consume()` call.
+     */
+    consume?: Omit<PlatformaticKafkaConsumeOptions, 'topics'>;
+    producer?: Omit<
+      PlatformaticKafkaProducerOptions,
+      keyof PlatformaticKafkaClientOptions
+    >;
+    send?: PlatformaticKafkaProduceOptions;
     serializer?: Serializer;
     deserializer?: Deserializer;
     parser?: KafkaParserConfig;

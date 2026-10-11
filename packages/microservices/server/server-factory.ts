@@ -6,6 +6,7 @@ import {
   MicroserviceOptions,
   MqttOptions,
   NatsOptions,
+  PlatformaticKafkaOptions,
   RedisOptions,
   RmqOptions,
   TcpOptions,
@@ -14,6 +15,7 @@ import { ServerGrpc } from './server-grpc.js';
 import { ServerKafka } from './server-kafka.js';
 import { ServerMqtt } from './server-mqtt.js';
 import { ServerNats } from './server-nats.js';
+import { ServerPlatformaticKafka } from './server-platformatic-kafka.js';
 import { ServerRedis } from './server-redis.js';
 import { ServerRMQ } from './server-rmq.js';
 import { ServerTCP } from './server-tcp.js';
@@ -35,6 +37,10 @@ export class ServerFactory {
         return new ServerGrpc(options as GrpcOptions['options']);
       case Transport.KAFKA:
         return new ServerKafka(options as Required<KafkaOptions>['options']);
+      case Transport.PLATFORMATIC_KAFKA:
+        return new ServerPlatformaticKafka(
+          options as Required<PlatformaticKafkaOptions>['options'],
+        );
       case Transport.RMQ:
         return new ServerRMQ(options as Required<RmqOptions>['options']);
       default:
