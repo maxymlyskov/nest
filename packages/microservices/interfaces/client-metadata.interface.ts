@@ -9,6 +9,7 @@ import {
   KafkaOptions,
   MqttOptions,
   NatsOptions,
+  PlatformaticKafkaOptions,
   RedisOptions,
   RmqOptions,
 } from './microservice-configuration.interface.js';
@@ -20,6 +21,7 @@ export type ClientOptions =
   | MqttOptions
   | GrpcOptions
   | KafkaOptions
+  | PlatformaticKafkaOptions
   | TcpClientOptions
   | RmqOptions;
 

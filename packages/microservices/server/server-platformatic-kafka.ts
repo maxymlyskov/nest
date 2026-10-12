@@ -22,12 +22,15 @@ import {
   Consumer,
   Message,
   MessagesStream,
-  MessageToProduce,
   PlatformaticKafkaPackage,
   ProduceResult,
   Producer,
 } from '../external/platformatic-kafka.interface.js';
 import { KafkaParser } from '../helpers/index.js';
+import {
+  toKafkaParserInput,
+  toPlatformaticKafkaMessage,
+} from '../helpers/platformatic-kafka-message.js';
 import {
   PacketId,
   PlatformaticKafkaOptions,
@@ -107,11 +110,9 @@ export class ServerPlatformaticKafka extends Server<never, KafkaStatus> {
     this.consumer = null;
     this.producer = null;
 
-    await Promise.allSettled([
-      stream?.close(),
-      consumer?.close(),
-      producer?.close(),
-    ]);
+    // The consumer cannot leave its group while a stream is still consuming.
+    await Promise.allSettled([stream?.close()]);
+    await Promise.allSettled([consumer?.close(), producer?.close()]);
     this._status$.next(KafkaStatus.STOPPED);
   }
 
@@ -219,19 +220,9 @@ export class ServerPlatformaticKafka extends Server<never, KafkaStatus> {
 
   public async handleMessage(message: Message) {
     const channel = message.topic;
-    const headers: Record<string, Buffer> = {};
-    for (const [key, value] of message.headers) {
-      headers[key.toString()] = value;
-    }
-    const rawMessage = this.parser.parse<KafkaRequest>({
-      key: message.key,
-      value: message.value,
-      headers,
-      topic: message.topic,
-      partition: message.partition,
-      offset: message.offset.toString(),
-      timestamp: message.timestamp.toString(),
-    });
+    const rawMessage = this.parser.parse<KafkaRequest>(
+      toKafkaParserInput(message),
+    );
     const decodedHeaders = rawMessage.headers as Record<string, string>;
     const correlationId = decodedHeaders[KafkaHeaders.CORRELATION_ID];
     const replyTopic = decodedHeaders[KafkaHeaders.REPLY_TOPIC];
@@ -343,34 +334,24 @@ export class ServerPlatformaticKafka extends Server<never, KafkaStatus> {
     const outgoingMessage: KafkaRequest = await this.serializer.serialize(
       message.response,
     );
-    const headers: Record<string, Buffer> = {};
-    for (const [key, value] of Object.entries(outgoingMessage.headers)) {
-      if (!isNil(value)) {
-        headers[key] = this.toBuffer(value);
-      }
-    }
-    headers[KafkaHeaders.CORRELATION_ID] = Buffer.from(correlationId);
+    const headers: Record<string, unknown> = {
+      ...outgoingMessage.headers,
+      [KafkaHeaders.CORRELATION_ID]: correlationId,
+    };
     if (message.err) {
-      headers[KafkaHeaders.NEST_ERR] = Buffer.from(
+      headers[KafkaHeaders.NEST_ERR] =
         typeof message.err === 'object'
           ? JSON.stringify(message.err)
-          : String(message.err),
-      );
+          : String(message.err);
     }
     if (message.isDisposed) {
       headers[KafkaHeaders.NEST_IS_DISPOSED] = Buffer.alloc(1);
     }
 
-    const replyMessage: MessageToProduce = {
-      topic: replyTopic,
-      headers: this.toHeaderMap(headers),
-    };
-    if (!isNil(outgoingMessage.key)) {
-      replyMessage.key = this.toBuffer(outgoingMessage.key);
-    }
-    if (!isNil(outgoingMessage.value)) {
-      replyMessage.value = this.toBuffer(outgoingMessage.value);
-    }
+    const replyMessage = toPlatformaticKafkaMessage(replyTopic, {
+      ...outgoingMessage,
+      headers,
+    });
     if (!isNil(replyPartition)) {
       replyMessage.partition = parseFloat(replyPartition);
     }
@@ -400,18 +381,6 @@ export class ServerPlatformaticKafka extends Server<never, KafkaStatus> {
         runEndHook();
       }
     });
-  }
-
-  // Without header serializers the producer writes keys as they are, so they
-  // have to be buffers already.
-  protected toHeaderMap(headers: Record<string, Buffer>): Map<Buffer, Buffer> {
-    return new Map(
-      Object.entries(headers).map(([key, value]) => [Buffer.from(key), value]),
-    );
-  }
-
-  protected toBuffer(value: Buffer | string | number): Buffer {
-    return Buffer.isBuffer(value) ? value : Buffer.from(String(value));
   }
 
   protected initializeSerializer(options: PlatformaticKafkaOptions['options']) {

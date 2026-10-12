@@ -10,6 +10,7 @@ import {
   KafkaOptions,
   MqttOptions,
   NatsOptions,
+  PlatformaticKafkaOptions,
   RedisOptions,
   RmqOptions,
 } from '../interfaces/microservice-configuration.interface.js';
@@ -17,6 +18,7 @@ import { ClientGrpcProxy } from './client-grpc.js';
 import { ClientKafka } from './client-kafka.js';
 import { ClientMqtt } from './client-mqtt.js';
 import { ClientNats } from './client-nats.js';
+import { ClientPlatformaticKafka } from './client-platformatic-kafka.js';
 import { ClientProxy } from './client-proxy.js';
 import { ClientRedis } from './client-redis.js';
 import { ClientRMQ } from './client-rmq.js';
@@ -67,6 +69,10 @@ export class ClientProxyFactory {
         ) as ClientProxy;
       case Transport.KAFKA:
         return new ClientKafka(options as Required<KafkaOptions>['options']);
+      case Transport.PLATFORMATIC_KAFKA:
+        return new ClientPlatformaticKafka(
+          options as Required<PlatformaticKafkaOptions>['options'],
+        ) as ClientProxy;
       default:
         return new ClientTCP(
           options as Required<TcpClientOptions>['options'],

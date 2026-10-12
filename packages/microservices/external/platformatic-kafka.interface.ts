@@ -49,11 +49,57 @@ export interface GroupAssignment {
   partitions: number[];
 }
 
+export interface GroupProtocolSubscription {
+  name: string;
+  version: number;
+  metadata?: Buffer | string;
+}
+
+export interface ExtendedGroupProtocolSubscription extends Omit<
+  GroupProtocolSubscription,
+  'name'
+> {
+  memberId: string;
+  topics?: string[];
+  ownedPartitions?: GroupAssignment[];
+  generationId?: number;
+  rackId?: string | null;
+}
+
+export interface GroupPartitionsAssignments {
+  memberId: string;
+  assignments: Map<string, GroupAssignment>;
+}
+
+export interface ClusterTopicMetadata {
+  partitionsCount: number;
+}
+
+export interface ClusterMetadata {
+  topics: Map<string, ClusterTopicMetadata>;
+}
+
+export type GroupPartitionsAssigner = (
+  current: string,
+  members: Map<string, ExtendedGroupProtocolSubscription>,
+  topics: Set<string>,
+  metadata: ClusterMetadata,
+) => GroupPartitionsAssignments[];
+
+export type GroupProtocolsMetadataCallback = (
+  protocols: GroupProtocolSubscription[],
+  topics: string[],
+  metadata: ClusterMetadata,
+) => Buffer | Promise<Buffer> | undefined;
+
 export interface GroupOptions {
   sessionTimeout?: number;
   rebalanceTimeout?: number;
   heartbeatInterval?: number;
   groupInstanceId?: string;
+  protocols?: GroupProtocolSubscription[];
+  protocolsMetadata?: GroupProtocolsMetadataCallback;
+  partitionAssigner?: GroupPartitionsAssigner;
 }
 
 export interface ConsumeBaseOptions {

@@ -3,6 +3,7 @@ import { ClientGrpcProxy } from '../../client/client-grpc.js';
 import { ClientKafka } from '../../client/client-kafka.js';
 import { ClientMqtt } from '../../client/client-mqtt.js';
 import { ClientNats } from '../../client/client-nats.js';
+import { ClientPlatformaticKafka } from '../../client/client-platformatic-kafka.js';
 import { ClientProxyFactory } from '../../client/client-proxy-factory.js';
 import { ClientRedis } from '../../client/client-redis.js';
 import { ClientRMQ } from '../../client/client-rmq.js';
@@ -50,6 +51,13 @@ describe('ClientProxyFactory', () => {
     it(`should create kafka client`, () => {
       const proxy = ClientProxyFactory.create({ transport: Transport.KAFKA });
       expect(proxy instanceof ClientKafka).toBe(true);
+    });
+
+    it(`should create platformatic kafka client`, () => {
+      const proxy = ClientProxyFactory.create({
+        transport: Transport.PLATFORMATIC_KAFKA,
+      });
+      expect(proxy instanceof ClientPlatformaticKafka).toBe(true);
     });
   });
 });

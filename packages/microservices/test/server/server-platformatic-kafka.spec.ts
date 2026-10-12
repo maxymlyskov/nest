@@ -198,6 +198,23 @@ describe('ServerPlatformaticKafka', () => {
       expect(untypedServer.consumer).toBeNull();
       expect(untypedServer.producer).toBeNull();
     });
+    it('should close the stream before the consumer leaves its group', async () => {
+      const calls: string[] = [];
+      const stream = createStream([]);
+      stream.close.mockImplementationOnce(async () => {
+        await Promise.resolve();
+        calls.push('stream');
+      });
+      consumer.close.mockImplementationOnce(async () => {
+        calls.push('consumer');
+      });
+      untypedServer.stream = stream;
+      untypedServer.consumer = consumer;
+
+      await server.close();
+
+      expect(calls).toEqual(['stream', 'consumer']);
+    });
     it('should close the producer when the consumer fails to close', async () => {
       consumer.close.mockRejectedValueOnce(new Error('close failed'));
       untypedServer.consumer = consumer;
