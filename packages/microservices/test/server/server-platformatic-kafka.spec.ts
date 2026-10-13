@@ -61,6 +61,8 @@ describe('ServerPlatformaticKafka', () => {
   let producer: Record<string, ReturnType<typeof vi.fn>>;
   let ConsumerCtor: ReturnType<typeof vi.fn>;
   let ProducerCtor: ReturnType<typeof vi.fn>;
+  let admin: Record<string, ReturnType<typeof vi.fn>>;
+  let AdminCtor: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     server = new ServerPlatformaticKafka({});
@@ -83,7 +85,19 @@ describe('ServerPlatformaticKafka', () => {
     ProducerCtor = vi.fn(function () {
       return producer;
     });
+    admin = {
+      listTopics: vi.fn(async () => [
+        topic,
+        'another.topic',
+        'test.topic.reply',
+      ]),
+      close: vi.fn(async () => {}),
+    };
+    AdminCtor = vi.fn(function () {
+      return admin;
+    });
     vi.spyOn(server, 'loadKafkaPackage').mockResolvedValue({
+      Admin: AdminCtor,
       Consumer: ConsumerCtor,
       Producer: ProducerCtor,
     } as any);
@@ -105,6 +119,16 @@ describe('ServerPlatformaticKafka', () => {
           clientId: 'nestjs-consumer-server',
           bootstrapBrokers: ['localhost:9092'],
         }),
+      );
+    });
+    it('should create missing topics on demand, as kafkajs does', async () => {
+      await server.listen(() => {});
+
+      expect(ConsumerCtor).toHaveBeenCalledWith(
+        expect.objectContaining({ autocreateTopics: true }),
+      );
+      expect(ProducerCtor).toHaveBeenCalledWith(
+        expect.objectContaining({ autocreateTopics: true }),
       );
     });
     it('should pass client, consumer and producer options through', async () => {
@@ -129,15 +153,35 @@ describe('ServerPlatformaticKafka', () => {
         clientId: 'app-svc',
         groupId: 'orders-svc',
         bootstrapBrokers: ['kafka:9092'],
+        autocreateTopics: true,
         retries: 5,
         sessionTimeout: 10000,
       });
       expect(ProducerCtor).toHaveBeenCalledWith({
         clientId: 'app-svc',
         bootstrapBrokers: ['kafka:9092'],
+        autocreateTopics: true,
         retries: 5,
         acks: 1,
       });
+    });
+    it('should let the client options turn off topic auto-creation', async () => {
+      server = new ServerPlatformaticKafka({
+        client: { autocreateTopics: false },
+      });
+      vi.spyOn(server, 'loadKafkaPackage').mockResolvedValue({
+        Consumer: ConsumerCtor,
+        Producer: ProducerCtor,
+      } as any);
+
+      await server.listen(() => {});
+
+      expect(ConsumerCtor).toHaveBeenCalledWith(
+        expect.objectContaining({ autocreateTopics: false }),
+      );
+      expect(ProducerCtor).toHaveBeenCalledWith(
+        expect.objectContaining({ autocreateTopics: false }),
+      );
     });
     it('should call callback', async () => {
       const callback = vi.fn();
@@ -255,6 +299,62 @@ describe('ServerPlatformaticKafka', () => {
         topics: [topic, 'another.topic'],
       });
     });
+    describe('when a message pattern is a RegExp', () => {
+      it('should consume the existing topics it matches', async () => {
+        untypedServer.addHandler(/^test\..+$/, vi.fn());
+        untypedServer.addHandler('explicit.topic', vi.fn());
+
+        await server.bindEvents(consumer as any);
+
+        expect(AdminCtor).toHaveBeenCalledWith({
+          autocreateTopics: true,
+          clientId: 'nestjs-consumer-server',
+          bootstrapBrokers: ['localhost:9092'],
+        });
+        expect(consumer.consume).toHaveBeenCalledWith({
+          mode: 'committed',
+          topics: ['explicit.topic', topic, 'test.topic.reply'],
+        });
+        expect(admin.close).toHaveBeenCalled();
+      });
+      it('should not consume a topic twice', async () => {
+        untypedServer.addHandler(/^test\..+$/, vi.fn());
+        untypedServer.addHandler(topic, vi.fn());
+
+        await server.bindEvents(consumer as any);
+
+        expect(consumer.consume).toHaveBeenCalledWith({
+          mode: 'committed',
+          topics: [topic, 'test.topic.reply'],
+        });
+      });
+      it('should not consume when no topic matches', async () => {
+        untypedServer.addHandler(/^missing\..+$/, vi.fn());
+
+        await server.bindEvents(consumer as any);
+
+        expect(consumer.consume).not.toHaveBeenCalled();
+      });
+      it('should close the admin client when listing topics fails', async () => {
+        admin.listTopics.mockRejectedValueOnce(new Error('listing failed'));
+        untypedServer.addHandler(/^test\..+$/, vi.fn());
+
+        await expect(server.bindEvents(consumer as any)).rejects.toThrow(
+          'listing failed',
+        );
+        expect(admin.close).toHaveBeenCalled();
+      });
+    });
+    it('should resume from the committed offsets by default, as kafkajs does', async () => {
+      untypedServer.messageHandlers = objectToMap({ [topic]: vi.fn() });
+
+      await server.bindEvents(consumer as any);
+
+      expect(consumer.consume).toHaveBeenCalledWith({
+        mode: 'committed',
+        topics: [topic],
+      });
+    });
     it('should handle every streamed message in order', async () => {
       const first = createMessage();
       const second = createMessage();
@@ -294,6 +394,30 @@ describe('ServerPlatformaticKafka', () => {
       await server.bindEvents(consumer as any);
 
       await vi.waitFor(() => expect(statuses).toEqual([KafkaStatus.CRASHED]));
+    });
+  });
+
+  describe('getHandlerByPattern', () => {
+    it('should return a handler when topic matches a regex pattern', () => {
+      const handler = vi.fn();
+      untypedServer.addHandler(/test\..*/, handler);
+
+      expect(server.getHandlerByPattern(topic)).toBe(handler);
+    });
+    it('should return null when topic does not match a regex pattern', () => {
+      untypedServer.addHandler(/another\..*/, vi.fn());
+
+      expect(server.getHandlerByPattern(topic)).toBeNull();
+    });
+    it('should chain event handlers registered for the same regex pattern', () => {
+      const pattern = /test\..*/;
+      const first = vi.fn();
+      const second = vi.fn();
+      untypedServer.addHandler(pattern, first, true);
+      untypedServer.addHandler(pattern, second, true);
+
+      expect(server.getHandlerByPattern(topic)).toBe(first);
+      expect(server.getHandlerByPattern(topic)?.next).toBe(second);
     });
   });
 

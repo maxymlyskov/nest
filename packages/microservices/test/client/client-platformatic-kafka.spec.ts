@@ -137,6 +137,30 @@ describe('ClientPlatformaticKafka', () => {
       );
     });
 
+    it('should create missing topics on demand, as kafkajs does', async () => {
+      await client.connect();
+
+      expect(ConsumerCtor).toHaveBeenCalledWith(
+        expect.objectContaining({ autocreateTopics: true }),
+      );
+      expect(ProducerCtor).toHaveBeenCalledWith(
+        expect.objectContaining({ autocreateTopics: true }),
+      );
+    });
+
+    it('should let the client options turn off topic auto-creation', async () => {
+      createClient({ client: { autocreateTopics: false } });
+
+      await client.connect();
+
+      expect(ConsumerCtor).toHaveBeenCalledWith(
+        expect.objectContaining({ autocreateTopics: false }),
+      );
+      expect(ProducerCtor).toHaveBeenCalledWith(
+        expect.objectContaining({ autocreateTopics: false }),
+      );
+    });
+
     it('should advertise its current reply partitions', async () => {
       await client.connect();
       untypedClient.consumerAssignments = { [replyTopic]: 2 };
@@ -156,6 +180,17 @@ describe('ClientPlatformaticKafka', () => {
 
       expect(consumer.consume).toHaveBeenCalledWith({
         mode: 'latest',
+        topics: [replyTopic],
+      });
+    });
+
+    it('should resume from the committed offsets by default, as kafkajs does', async () => {
+      client.subscribeToResponseOf(topic);
+
+      await client.connect();
+
+      expect(consumer.consume).toHaveBeenCalledWith({
+        mode: 'committed',
         topics: [replyTopic],
       });
     });

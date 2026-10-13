@@ -125,10 +125,21 @@ export type ConsumerOptions = BaseOptions & {
 } & GroupOptions &
   ConsumeBaseOptions;
 
+export interface PartitionerContext {
+  metadata: ClusterMetadata | undefined;
+}
+
+export type Partitioner = (
+  message: MessageToProduce,
+  key: Buffer | undefined,
+  context: PartitionerContext,
+) => number;
+
 export interface ProduceOptions {
   idempotent?: boolean;
   acks?: number;
   compression?: 'none' | 'gzip' | 'snappy' | 'lz4' | 'zstd';
+  partitioner?: Partitioner;
   autocreateTopics?: boolean;
 }
 
@@ -206,7 +217,19 @@ export interface Producer {
   close(force?: boolean): Promise<void>;
 }
 
+export type AdminOptions = BaseOptions;
+
+export interface ListTopicsOptions {
+  includeInternals?: boolean;
+}
+
+export interface Admin {
+  listTopics(options?: ListTopicsOptions): Promise<string[]>;
+  close(): Promise<void>;
+}
+
 export interface PlatformaticKafkaPackage {
+  Admin: new (options: AdminOptions) => Admin;
   Consumer: new (options: ConsumerOptions) => Consumer;
   Producer: new (options: ProducerOptions) => Producer;
 }

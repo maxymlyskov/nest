@@ -205,6 +205,8 @@ export class ClientPlatformaticKafka extends ClientProxy<never, KafkaStatus> {
   ): Promise<void> {
     const kafkaPackage = await this.loadKafkaPackage();
     const clientOptions = {
+      // kafkajs creates missing topics by default, @platformatic/kafka does not.
+      autocreateTopics: true,
       ...this.options?.client,
       clientId: this.clientId,
       bootstrapBrokers: this.brokers,
@@ -244,6 +246,9 @@ export class ClientPlatformaticKafka extends ClientProxy<never, KafkaStatus> {
     // `consume()` joins the group first, so the reply partitions are known
     // once it resolves.
     this.stream = await this.consumer.consume({
+      // The library defaults to "latest", which also skips what was produced
+      // during a rebalance; kafkajs resumes from the committed offsets.
+      mode: 'committed',
       ...(this.options?.consume || {}),
       topics: this.responsePatterns,
     });

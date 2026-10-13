@@ -19,6 +19,7 @@ import { KafkaHeaders, Transport } from '../enums/index.js';
 import { KafkaStatus } from '../events/index.js';
 import { KafkaRetriableException } from '../exceptions/index.js';
 import {
+  BaseOptions,
   Consumer,
   Message,
   MessagesStream,
@@ -32,6 +33,7 @@ import {
   toPlatformaticKafkaMessage,
 } from '../helpers/platformatic-kafka-message.js';
 import {
+  MessageHandler,
   PacketId,
   PlatformaticKafkaOptions,
   ReadPacket,
@@ -42,7 +44,7 @@ import { KafkaRequest } from '../serializers/kafka-request.serializer.js';
 import { KafkaRequestSerializer } from '../serializers/kafka-request.serializer.js';
 import { Server } from './server.js';
 import { Logger } from '@nestjs/common';
-import { isNil } from '@nestjs/common/internal';
+import { isNil, isString } from '@nestjs/common/internal';
 
 type ReplyPacket = WritePacket & Partial<PacketId>;
 
@@ -92,6 +94,35 @@ export class ServerPlatformaticKafka extends Server<never, KafkaStatus> {
     this.initializeDeserializer(options);
   }
 
+  public addHandler(
+    pattern: any,
+    callback: MessageHandler,
+    isEventHandler = false,
+    extras: Record<string, any> = {},
+  ) {
+    if (!(pattern instanceof RegExp)) {
+      return super.addHandler(pattern, callback, isEventHandler, extras);
+    }
+
+    const messageHandlers = this.messageHandlers as Map<
+      string | RegExp,
+      MessageHandler
+    >;
+    callback.isEventHandler = isEventHandler;
+    callback.extras = extras;
+
+    if (messageHandlers.has(pattern) && isEventHandler) {
+      const headRef = messageHandlers.get(pattern)!;
+      const getTail = (handler: MessageHandler) =>
+        handler?.next ? getTail(handler.next) : handler;
+
+      const tailRef = getTail(headRef);
+      tailRef.next = callback;
+    } else {
+      messageHandlers.set(pattern, callback);
+    }
+  }
+
   public async listen(
     callback: (err?: unknown, ...optionalParams: unknown[]) => void,
   ): Promise<void> {
@@ -118,11 +149,7 @@ export class ServerPlatformaticKafka extends Server<never, KafkaStatus> {
 
   public async start(callback: () => void): Promise<void> {
     const kafkaPackage = await this.loadKafkaPackage();
-    const clientOptions = {
-      ...this.options?.client,
-      clientId: this.clientId,
-      bootstrapBrokers: this.brokers,
-    };
+    const clientOptions = this.getClientOptions();
     this.consumer = new kafkaPackage.Consumer({
       ...this.options?.consumer,
       ...clientOptions,
@@ -175,16 +202,67 @@ export class ServerPlatformaticKafka extends Server<never, KafkaStatus> {
   }
 
   public async bindEvents(consumer: Consumer) {
-    const registeredPatterns = [...this.messageHandlers.keys()];
-    if (registeredPatterns.length === 0) {
+    const registeredPatterns = [...this.messageHandlers.keys()] as Array<
+      string | RegExp
+    >;
+    const topics = await this.resolveTopics(registeredPatterns);
+    if (topics.length === 0) {
       return;
     }
 
     this.stream = await consumer.consume({
+      // The library defaults to "latest", which also skips what was produced
+      // during a rebalance; kafkajs resumes from the committed offsets.
+      mode: 'committed',
       ...(this.options?.consume || {}),
-      topics: registeredPatterns,
+      topics,
     });
     void this.consumeStream(this.stream);
+  }
+
+  // `consume()` takes topic names only, so a RegExp pattern is matched against
+  // the topics that exist when the server starts, as kafkajs' `subscribe()` does.
+  protected async resolveTopics(
+    patterns: Array<string | RegExp>,
+  ): Promise<string[]> {
+    const topics = patterns.filter(isString);
+    const regexPatterns = patterns.filter(
+      (pattern): pattern is RegExp => pattern instanceof RegExp,
+    );
+    if (regexPatterns.length === 0) {
+      return topics;
+    }
+
+    const existingTopics = await this.listTopics();
+    for (const topic of existingTopics) {
+      if (
+        !topics.includes(topic) &&
+        regexPatterns.some(pattern => this.isPatternMatch(pattern, topic))
+      ) {
+        topics.push(topic);
+      }
+    }
+    return topics;
+  }
+
+  protected async listTopics(): Promise<string[]> {
+    const kafkaPackage = await this.loadKafkaPackage();
+    const admin = new kafkaPackage.Admin(this.getClientOptions());
+    try {
+      return await admin.listTopics();
+    } finally {
+      await admin.close();
+    }
+  }
+
+  protected getClientOptions(): BaseOptions {
+    return {
+      // kafkajs creates missing topics by default, @platformatic/kafka does not.
+      autocreateTopics: true,
+      ...this.options?.client,
+      clientId: this.clientId,
+      bootstrapBrokers: this.brokers,
+    };
   }
 
   // One message at a time, in order, as kafkajs' `eachMessage` does by default.
@@ -200,6 +278,36 @@ export class ServerPlatformaticKafka extends Server<never, KafkaStatus> {
       this.logger.error(err);
       this._status$.next(KafkaStatus.CRASHED);
     }
+  }
+
+  public getHandlerByPattern(pattern: string): MessageHandler | null {
+    const handler = super.getHandlerByPattern(pattern);
+    if (handler) {
+      return handler;
+    }
+
+    const route = this.getRouteFromPattern(pattern);
+    const messageHandlers = this.messageHandlers as Map<
+      string | RegExp,
+      MessageHandler
+    >;
+    for (const [registeredPattern, registeredHandler] of messageHandlers) {
+      if (
+        registeredPattern instanceof RegExp &&
+        this.isPatternMatch(registeredPattern, route)
+      ) {
+        return registeredHandler;
+      }
+    }
+
+    return null;
+  }
+
+  private isPatternMatch(pattern: RegExp, route: string): boolean {
+    pattern.lastIndex = 0;
+    const isMatch = pattern.test(route);
+    pattern.lastIndex = 0;
+    return isMatch;
   }
 
   public getPublisher(
