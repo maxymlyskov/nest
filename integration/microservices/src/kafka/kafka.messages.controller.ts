@@ -13,28 +13,28 @@ export class KafkaMessagesController {
 
   @MessagePattern('math.sum.sync.kafka.message')
   mathSumSyncKafkaMessage(data: any) {
-    return (data.value.numbers || []).reduce((a, b) => a + b);
+    return (data.numbers || []).reduce((a, b) => a + b);
   }
 
   @MessagePattern('math.sum.sync.without.key')
   mathSumSyncWithoutKey(data: any) {
-    return (data.value.numbers || []).reduce((a, b) => a + b);
+    return (data.numbers || []).reduce((a, b) => a + b);
   }
 
   @MessagePattern('math.sum.sync.plain.object')
   mathSumSyncPlainObject(data: any) {
-    return (data.value.numbers || []).reduce((a, b) => a + b);
+    return (data.numbers || []).reduce((a, b) => a + b);
   }
 
   @MessagePattern('math.sum.sync.array')
   mathSumSyncArray(data: any) {
-    return (data.value || []).reduce((a, b) => a + b);
+    return (data || []).reduce((a, b) => a + b);
   }
 
   @MessagePattern('math.sum.sync.string')
   mathSumSyncString(data: any) {
     // this.logger.error(util.format('mathSumSyncString() data: %o', data));
-    return (data.value.split(',') || [])
+    return (data.split(',') || [])
       .map(i => {
         return parseFloat(i);
       })
@@ -44,7 +44,7 @@ export class KafkaMessagesController {
   @MessagePattern('math.sum.sync.number')
   mathSumSyncNumber(data: any) {
     // this.logger.error(util.format('mathSumSyncNumber() data: %o', data));
-    return (data.value.toString().split('') || [])
+    return (data.toString().split('') || [])
       .map(i => {
         return parseFloat(i);
       })
@@ -53,22 +53,22 @@ export class KafkaMessagesController {
 
   @MessagePattern(/^math\.sum\.sync\.regex\..+$/)
   mathSumSyncRegex(data: any) {
-    return (data.value.numbers || []).reduce((a, b) => a + b);
+    return (data.numbers || []).reduce((a, b) => a + b);
   }
 
   @EventPattern('notify')
   eventHandler(data: any) {
-    KafkaController.IS_NOTIFIED = data.value.notify;
+    KafkaController.IS_NOTIFIED = data.notify;
   }
 
   // Complex data to send.
   @MessagePattern('user.create')
-  async createUser(params: { value: { user: UserDto } }) {
-    return new UserEntity(params.value.user);
+  async createUser(params: { user: UserDto }) {
+    return new UserEntity(params.user);
   }
 
   @MessagePattern('business.create')
-  async createBusiness(params: { value: { business: BusinessDto } }) {
-    return new BusinessEntity(params.value.business);
+  async createBusiness(params: { business: BusinessDto }) {
+    return new BusinessEntity(params.business);
   }
 }

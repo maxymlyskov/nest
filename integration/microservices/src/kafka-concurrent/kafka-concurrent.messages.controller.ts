@@ -22,7 +22,7 @@ export class KafkaConcurrentMessagesController {
     this.waiting.next(true);
 
     // find sum
-    const sum = data.value[0] + data.value[1];
+    const sum = data[0] + data[1];
 
     return this.waiting.asObservable().pipe(
       skipWhile(isWaiting => {
