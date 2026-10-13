@@ -7,7 +7,12 @@ import {
   OnModuleInit,
   Post,
 } from '@nestjs/common';
-import { Client, ClientKafka, Transport } from '@nestjs/microservices';
+import {
+  Client,
+  ClientKafka,
+  ClientPlatformaticKafka,
+  Transport,
+} from '@nestjs/microservices';
 import { lastValueFrom, Observable } from 'rxjs';
 import { BusinessDto } from './dtos/business.dto.js';
 import { UserDto } from './dtos/user.dto.js';
@@ -26,7 +31,7 @@ export class KafkaController implements OnModuleInit, OnModuleDestroy {
       },
     },
   })
-  private readonly client: ClientKafka;
+  protected readonly client: ClientKafka | ClientPlatformaticKafka;
 
   async onModuleInit() {
     const requestPatterns = [

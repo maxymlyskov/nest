@@ -7,7 +7,12 @@ import {
   OnModuleInit,
   Post,
 } from '@nestjs/common';
-import { Client, ClientKafka, Transport } from '@nestjs/microservices';
+import {
+  Client,
+  ClientKafka,
+  ClientPlatformaticKafka,
+  Transport,
+} from '@nestjs/microservices';
 import { PartitionerArgs } from 'kafkajs';
 import { Observable } from 'rxjs';
 import { SumDto } from './dto/sum.dto.js';
@@ -41,7 +46,7 @@ export class KafkaConcurrentController
       },
     },
   })
-  public readonly client: ClientKafka;
+  public readonly client: ClientKafka | ClientPlatformaticKafka;
 
   async onModuleInit() {
     const requestPatterns = ['math.sum.sync.number.wait'];

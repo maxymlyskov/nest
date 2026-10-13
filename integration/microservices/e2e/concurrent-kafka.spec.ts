@@ -1,4 +1,4 @@
-import { INestApplication, Logger } from '@nestjs/common';
+import { INestApplication, Logger, Type } from '@nestjs/common';
 import { MicroserviceOptions, Transport } from '@nestjs/microservices';
 import { Test } from '@nestjs/testing';
 import { Admin, ITopicMetadata, Kafka } from 'kafkajs';
@@ -6,8 +6,41 @@ import request from 'supertest';
 import * as util from 'util';
 import { KafkaConcurrentController } from '../src/kafka-concurrent/kafka-concurrent.controller.js';
 import { KafkaConcurrentMessagesController } from '../src/kafka-concurrent/kafka-concurrent.messages.controller.js';
+import { PlatformaticKafkaConcurrentController } from '../src/kafka-concurrent/platformatic-kafka-concurrent.controller.js';
 
-describe.skip('Kafka concurrent', function () {
+describe.skip.each<{
+  name: string;
+  controllerType: Type<KafkaConcurrentController>;
+  microservice: MicroserviceOptions;
+}>([
+  {
+    name: 'kafkajs',
+    controllerType: KafkaConcurrentController,
+    microservice: {
+      transport: Transport.KAFKA,
+      options: {
+        client: {
+          brokers: ['localhost:9092'],
+        },
+        run: {
+          partitionsConsumedConcurrently: 3,
+        },
+      },
+    },
+  },
+  {
+    name: '@platformatic/kafka',
+    controllerType: PlatformaticKafkaConcurrentController,
+    microservice: {
+      transport: Transport.PLATFORMATIC_KAFKA,
+      options: {
+        client: {
+          bootstrapBrokers: ['localhost:9092'],
+        },
+      },
+    },
+  },
+])('Kafka concurrent ($name)', function ({ controllerType, microservice }) {
   const numbersOfServers = 3;
 
   const requestTopic = 'math.sum.sync.number.wait';
@@ -22,10 +55,7 @@ describe.skip('Kafka concurrent', function () {
   // set timeout to be longer (especially for the after hook)
   const startServer = async () => {
     const module = await Test.createTestingModule({
-      controllers: [
-        KafkaConcurrentController,
-        KafkaConcurrentMessagesController,
-      ],
+      controllers: [controllerType, KafkaConcurrentMessagesController],
     }).compile();
 
     // use our own logger for a little
@@ -35,17 +65,7 @@ describe.skip('Kafka concurrent', function () {
 
     const server = app.getHttpAdapter().getInstance();
 
-    app.connectMicroservice<MicroserviceOptions>({
-      transport: Transport.KAFKA,
-      options: {
-        client: {
-          brokers: ['localhost:9092'],
-        },
-        run: {
-          partitionsConsumedConcurrently: numbersOfServers,
-        },
-      },
-    });
+    app.connectMicroservice<MicroserviceOptions>(microservice);
 
     // enable these for clean shutdown
     app.enableShutdownHooks();
@@ -201,7 +221,7 @@ describe.skip('Kafka concurrent', function () {
             // wait a second before closing so the producers can send the message to the server consumers
             setTimeout(async () => {
               // get the controller
-              const controller = apps[index].get(KafkaConcurrentController);
+              const controller = apps[index].get(controllerType);
 
               // close the controller clients
               await controller.client.close();
@@ -244,7 +264,7 @@ describe.skip('Kafka concurrent', function () {
             // wait a second before closing so the producers can send the message to the server consumers
             setTimeout(async () => {
               // get the controller
-              const controller = apps[index].get(KafkaConcurrentController);
+              const controller = apps[index].get(controllerType);
 
               // connect the controller client
               await controller.client.connect();

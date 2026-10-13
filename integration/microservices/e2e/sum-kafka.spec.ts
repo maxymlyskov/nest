@@ -1,4 +1,4 @@
-import { INestApplication } from '@nestjs/common';
+import { INestApplication, Type } from '@nestjs/common';
 import { MicroserviceOptions, Transport } from '@nestjs/microservices';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
@@ -7,32 +7,56 @@ import { UserDto } from '../src/kafka/dtos/user.dto.js';
 import { UserEntity } from '../src/kafka/entities/user.entity.js';
 import { KafkaController } from '../src/kafka/kafka.controller.js';
 import { KafkaMessagesController } from '../src/kafka/kafka.messages.controller.js';
+import { PlatformaticKafkaController } from '../src/kafka/platformatic-kafka.controller.js';
 
 /**
  * Skip this flaky test in CI/CD pipeline as it frequently
  * fails to connect to Kafka container in the cloud.
  */
-describe.skip('Kafka transport', function () {
-  let server: any;
-  let app: INestApplication;
-
-  // set timeout to be longer (especially for the after hook)
-  beforeAll(async () => {
-    const module = await Test.createTestingModule({
-      controllers: [KafkaController, KafkaMessagesController],
-    }).compile();
-
-    app = module.createNestApplication();
-    server = app.getHttpAdapter().getInstance();
-
-    app.connectMicroservice<MicroserviceOptions>({
+describe.skip.each<{
+  name: string;
+  controllerType: Type<KafkaController>;
+  microservice: MicroserviceOptions;
+}>([
+  {
+    name: 'kafkajs',
+    controllerType: KafkaController,
+    microservice: {
       transport: Transport.KAFKA,
       options: {
         client: {
           brokers: ['localhost:9092'],
         },
       },
-    });
+    },
+  },
+  {
+    name: '@platformatic/kafka',
+    controllerType: PlatformaticKafkaController,
+    microservice: {
+      transport: Transport.PLATFORMATIC_KAFKA,
+      options: {
+        client: {
+          bootstrapBrokers: ['localhost:9092'],
+        },
+      },
+    },
+  },
+])('Kafka transport ($name)', function ({ controllerType, microservice }) {
+  let server: any;
+  let app: INestApplication;
+
+  // set timeout to be longer (especially for the after hook)
+  beforeAll(async () => {
+    KafkaController.IS_NOTIFIED = false;
+    const module = await Test.createTestingModule({
+      controllers: [controllerType, KafkaMessagesController],
+    }).compile();
+
+    app = module.createNestApplication();
+    server = app.getHttpAdapter().getInstance();
+
+    app.connectMicroservice<MicroserviceOptions>(microservice);
     app.enableShutdownHooks();
     await app.startAllMicroservices();
     await app.init();
