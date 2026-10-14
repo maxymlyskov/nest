@@ -11,6 +11,8 @@ import {
   KAFKA_DEFAULT_BROKER,
   KAFKA_DEFAULT_CLIENT,
   KAFKA_DEFAULT_GROUP,
+  PLATFORMATIC_KAFKA_MAX_RESTART_DELAY,
+  PLATFORMATIC_KAFKA_RESTART_DELAY,
 } from '../constants.js';
 import { KafkaResponseDeserializer } from '../deserializers/kafka-response.deserializer.js';
 import { KafkaHeaders } from '../enums/index.js';
@@ -74,6 +76,8 @@ export class ClientPlatformaticKafka extends ClientProxy<never, KafkaStatus> {
   protected consumer: Consumer | null = null;
   protected producer: Producer | null = null;
   protected stream: MessagesStream | null = null;
+  protected restartTimer: NodeJS.Timeout | null = null;
+  protected restartAttempts = 0;
   protected initialized: Promise<void> | null = null;
   protected parser: KafkaParser;
   protected responsePatterns: string[] = [];
@@ -154,6 +158,11 @@ export class ClientPlatformaticKafka extends ClientProxy<never, KafkaStatus> {
     this.consumer = null;
     this.producer = null;
     this.initialized = null;
+    if (this.restartTimer) {
+      clearTimeout(this.restartTimer);
+      this.restartTimer = null;
+    }
+    this.restartAttempts = 0;
     // Pending requests were failed above, so a reconnecting client has no
     // reply partition left to keep.
     this.consumerAssignments = {};
@@ -245,14 +254,22 @@ export class ClientPlatformaticKafka extends ClientProxy<never, KafkaStatus> {
 
     // `consume()` joins the group first, so the reply partitions are known
     // once it resolves.
-    this.stream = await this.consumer.consume({
+    const consumer = this.consumer;
+    const stream = await consumer.consume({
       // The library defaults to "latest", which also skips what was produced
       // during a rebalance; kafkajs resumes from the committed offsets.
       mode: 'committed',
       ...(this.options?.consume || {}),
       topics: this.responsePatterns,
     });
-    void this.consumeStream(this.stream);
+    if (this.consumer !== consumer) {
+      // Closed while joining: the consumer cannot leave its group while this
+      // stream is open.
+      await stream.close();
+      return;
+    }
+    this.stream = stream;
+    void this.consumeStream(stream);
   }
 
   protected async consumeStream(stream: MessagesStream) {
@@ -266,7 +283,38 @@ export class ClientPlatformaticKafka extends ClientProxy<never, KafkaStatus> {
       }
       this.logger.error(err);
       this._status$.next(KafkaStatus.CRASHED);
+      this.stream = null;
+      this.scheduleRestart();
     }
+  }
+
+  // The library destroys the stream once a fetch has used up its retries, as
+  // during a broker restart, and does not consume again by itself.
+  protected scheduleRestart() {
+    const consumer = this.consumer;
+    if (!consumer) {
+      return;
+    }
+    const delay = Math.min(
+      PLATFORMATIC_KAFKA_RESTART_DELAY * 2 ** this.restartAttempts++,
+      PLATFORMATIC_KAFKA_MAX_RESTART_DELAY,
+    );
+    this.restartTimer = setTimeout(async () => {
+      this.restartTimer = null;
+      if (this.consumer !== consumer) {
+        return;
+      }
+      try {
+        await this.bindTopics();
+        this.restartAttempts = 0;
+      } catch (err) {
+        if (this.consumer !== consumer) {
+          return;
+        }
+        this.logger.error(err);
+        this.scheduleRestart();
+      }
+    }, delay);
   }
 
   public async handleResponse(message: Message): Promise<void> {
@@ -361,6 +409,18 @@ export class ClientPlatformaticKafka extends ClientProxy<never, KafkaStatus> {
     this.consumer.on('consumer:group:join', payload =>
       this.setConsumerAssignments(payload),
     );
+    // Emitted when a rejoin fails, which ends the group membership. Without a
+    // listener the process would crash; the stream is consumed again instead.
+    this.consumer.on('error', err => {
+      this.logger.error(err);
+      this._status$.next(KafkaStatus.CRASHED);
+      const stream = this.stream;
+      if (stream) {
+        this.stream = null;
+        void stream.close();
+        this.scheduleRestart();
+      }
+    });
   }
 
   protected registerProducerEventListeners() {
@@ -424,7 +484,7 @@ export class ClientPlatformaticKafka extends ClientProxy<never, KafkaStatus> {
 
   protected publish(
     partialPacket: ReadPacket,
-    callback: (packet: WritePacket) => any,
+    callback: (packet: WritePacket) => void,
   ): () => void {
     const packet = this.assignPacketId(partialPacket);
     this.routingMap.set(packet.id, callback);

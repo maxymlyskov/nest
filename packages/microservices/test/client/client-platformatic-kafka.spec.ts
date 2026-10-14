@@ -284,6 +284,100 @@ describe('ClientPlatformaticKafka', () => {
     });
   });
 
+  describe('when the reply stream fails', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+      client.subscribeToResponseOf(topic);
+      consumer.consume.mockResolvedValueOnce(
+        createStream([], new Error('fetch failed')),
+      );
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('should consume the reply topics again after a delay', async () => {
+      const stream = createStream();
+      consumer.consume.mockResolvedValueOnce(stream);
+
+      await client.connect();
+      await vi.advanceTimersByTimeAsync(999);
+      expect(consumer.consume).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(1);
+
+      expect(consumer.consume).toHaveBeenCalledTimes(2);
+      expect(consumer.consume).toHaveBeenLastCalledWith({
+        mode: 'committed',
+        topics: [`${topic}.reply`],
+      });
+      expect(untypedClient.stream).toBe(stream);
+    });
+    it('should double the delay while consuming fails, up to 30 seconds', async () => {
+      await client.connect();
+      consumer.consume.mockRejectedValue(new Error('broker down'));
+
+      const delays = [1_000, 2_000, 4_000, 8_000, 16_000, 30_000, 30_000];
+      for (const [i, delay] of delays.entries()) {
+        await vi.advanceTimersByTimeAsync(delay - 1);
+        expect(consumer.consume).toHaveBeenCalledTimes(i + 1);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(consumer.consume).toHaveBeenCalledTimes(i + 2);
+      }
+    });
+    it('should not consume again after "close"', async () => {
+      await client.connect();
+      await vi.advanceTimersByTimeAsync(0);
+      await client.close();
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(consumer.consume).toHaveBeenCalledOnce();
+    });
+    it('should close a stream that arrives after "close"', async () => {
+      const stream = createStream();
+      consumer.consume.mockImplementationOnce(async () => {
+        await client.close();
+        return stream;
+      });
+
+      await client.connect();
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(stream.close).toHaveBeenCalledOnce();
+      expect(untypedClient.stream).toBeNull();
+    });
+  });
+
+  describe('when the consumer emits "error"', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('should log it, report the client as crashed and consume again', async () => {
+      const stream = createStream();
+      consumer.consume.mockResolvedValueOnce(stream);
+      client.subscribeToResponseOf(topic);
+      const logError = vi.spyOn(untypedClient.logger, 'error');
+      const statuses: string[] = [];
+      client.status.subscribe(status => statuses.push(status));
+      await client.connect();
+
+      const [, listener] = consumer.on.mock.calls.find(
+        ([event]) => event === 'error',
+      )!;
+      const err = new Error('rejoin failed');
+      listener(err);
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(logError).toHaveBeenCalledWith(err);
+      expect(statuses).toEqual([KafkaStatus.CRASHED]);
+      expect(stream.close).toHaveBeenCalledOnce();
+      expect(consumer.consume).toHaveBeenCalledTimes(2);
+    });
+  });
+
   describe('setConsumerAssignments', () => {
     it('should keep the minimum partition per topic', () => {
       untypedClient.setConsumerAssignments({

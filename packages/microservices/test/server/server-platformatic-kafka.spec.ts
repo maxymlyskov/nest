@@ -280,6 +280,10 @@ describe('ServerPlatformaticKafka', () => {
   });
 
   describe('bindEvents', () => {
+    beforeEach(() => {
+      untypedServer.consumer = consumer;
+    });
+
     it('should not consume when there are no message handlers', async () => {
       await server.bindEvents(consumer as any);
       expect(consumer.consume).not.toHaveBeenCalled();
@@ -394,6 +398,96 @@ describe('ServerPlatformaticKafka', () => {
       await server.bindEvents(consumer as any);
 
       await vi.waitFor(() => expect(statuses).toEqual([KafkaStatus.CRASHED]));
+    });
+    it('should close a stream that arrives after "close"', async () => {
+      const stream = createStream([]);
+      consumer.consume.mockImplementationOnce(async () => {
+        await server.close();
+        return stream;
+      });
+      untypedServer.messageHandlers = objectToMap({ [topic]: vi.fn() });
+
+      await server.bindEvents(consumer as any);
+
+      expect(stream.close).toHaveBeenCalledOnce();
+      expect(untypedServer.stream).toBeNull();
+    });
+
+    describe('when the stream fails', () => {
+      beforeEach(() => {
+        vi.useFakeTimers();
+        untypedServer.messageHandlers = objectToMap({ [topic]: vi.fn() });
+        consumer.consume.mockResolvedValueOnce(
+          createStream([], new Error('fetch failed')),
+        );
+      });
+      afterEach(() => {
+        vi.useRealTimers();
+      });
+
+      it('should consume again after a delay', async () => {
+        const stream = createStream([]);
+        consumer.consume.mockResolvedValueOnce(stream);
+
+        await server.bindEvents(consumer as any);
+        await vi.advanceTimersByTimeAsync(999);
+        expect(consumer.consume).toHaveBeenCalledOnce();
+        await vi.advanceTimersByTimeAsync(1);
+
+        expect(consumer.consume).toHaveBeenCalledTimes(2);
+        expect(untypedServer.stream).toBe(stream);
+      });
+      it('should double the delay while consuming fails, up to 30 seconds', async () => {
+        consumer.consume.mockRejectedValue(new Error('broker down'));
+
+        await server.bindEvents(consumer as any);
+        const delays = [1_000, 2_000, 4_000, 8_000, 16_000, 30_000, 30_000];
+        for (const [i, delay] of delays.entries()) {
+          await vi.advanceTimersByTimeAsync(delay - 1);
+          expect(consumer.consume).toHaveBeenCalledTimes(i + 1);
+          await vi.advanceTimersByTimeAsync(1);
+          expect(consumer.consume).toHaveBeenCalledTimes(i + 2);
+        }
+      });
+      it('should not consume again after "close"', async () => {
+        await server.bindEvents(consumer as any);
+        await vi.advanceTimersByTimeAsync(0);
+        await server.close();
+        await vi.advanceTimersByTimeAsync(60_000);
+
+        expect(consumer.consume).toHaveBeenCalledOnce();
+      });
+    });
+  });
+
+  describe('when the consumer emits "error"', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('should log it, emit "crashed" and consume again', async () => {
+      const stream = createStream([]);
+      consumer.consume.mockResolvedValueOnce(stream);
+      untypedServer.messageHandlers = objectToMap({ [topic]: vi.fn() });
+      const logError = vi.spyOn(untypedServer.logger, 'error');
+      const statuses: KafkaStatus[] = [];
+      server.status.subscribe(status => statuses.push(status));
+      await server.listen(() => {});
+
+      const [, listener] = consumer.on.mock.calls.find(
+        ([event]) => event === 'error',
+      )!;
+      const err = new Error('rejoin failed');
+      listener(err);
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(logError).toHaveBeenCalledWith(err);
+      expect(statuses).toEqual([KafkaStatus.CRASHED]);
+      expect(stream.close).toHaveBeenCalledOnce();
+      expect(consumer.consume).toHaveBeenCalledTimes(2);
     });
   });
 

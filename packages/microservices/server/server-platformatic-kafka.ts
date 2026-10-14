@@ -12,6 +12,8 @@ import {
   KAFKA_DEFAULT_GROUP,
   NO_EVENT_HANDLER,
   NO_MESSAGE_HANDLER,
+  PLATFORMATIC_KAFKA_MAX_RESTART_DELAY,
+  PLATFORMATIC_KAFKA_RESTART_DELAY,
 } from '../constants.js';
 import { PlatformaticKafkaContext } from '../ctx-host/index.js';
 import { KafkaRequestDeserializer } from '../deserializers/kafka-request.deserializer.js';
@@ -64,6 +66,8 @@ export class ServerPlatformaticKafka extends Server<never, KafkaStatus> {
   protected consumer: Consumer | null = null;
   protected producer: Producer | null = null;
   protected stream: MessagesStream | null = null;
+  protected restartTimer: NodeJS.Timeout | null = null;
+  protected restartAttempts = 0;
   protected parser: KafkaParser;
   protected brokers: string[];
   protected clientId: string;
@@ -95,10 +99,10 @@ export class ServerPlatformaticKafka extends Server<never, KafkaStatus> {
   }
 
   public addHandler(
-    pattern: any,
+    pattern: unknown,
     callback: MessageHandler,
     isEventHandler = false,
-    extras: Record<string, any> = {},
+    extras: Record<string, unknown> = {},
   ) {
     if (!(pattern instanceof RegExp)) {
       return super.addHandler(pattern, callback, isEventHandler, extras);
@@ -140,6 +144,11 @@ export class ServerPlatformaticKafka extends Server<never, KafkaStatus> {
     this.stream = null;
     this.consumer = null;
     this.producer = null;
+    if (this.restartTimer) {
+      clearTimeout(this.restartTimer);
+      this.restartTimer = null;
+    }
+    this.restartAttempts = 0;
 
     // The consumer cannot leave its group while a stream is still consuming.
     await Promise.allSettled([stream?.close()]);
@@ -187,6 +196,18 @@ export class ServerPlatformaticKafka extends Server<never, KafkaStatus> {
     this.consumer.on('consumer:group:rebalance', () =>
       this._status$.next(KafkaStatus.REBALANCING),
     );
+    // Emitted when a rejoin fails, which ends the group membership. Without a
+    // listener the process would crash; the stream is consumed again instead.
+    this.consumer.on('error', err => {
+      this.logger.error(err);
+      this._status$.next(KafkaStatus.CRASHED);
+      const stream = this.stream;
+      if (stream) {
+        this.stream = null;
+        void stream.close();
+        this.scheduleRestart();
+      }
+    });
   }
 
   protected registerProducerEventListeners() {
@@ -210,14 +231,21 @@ export class ServerPlatformaticKafka extends Server<never, KafkaStatus> {
       return;
     }
 
-    this.stream = await consumer.consume({
+    const stream = await consumer.consume({
       // The library defaults to "latest", which also skips what was produced
       // during a rebalance; kafkajs resumes from the committed offsets.
       mode: 'committed',
       ...(this.options?.consume || {}),
       topics,
     });
-    void this.consumeStream(this.stream);
+    if (this.consumer !== consumer) {
+      // Closed while joining: the consumer cannot leave its group while this
+      // stream is open.
+      await stream.close();
+      return;
+    }
+    this.stream = stream;
+    void this.consumeStream(stream);
   }
 
   // `consume()` takes topic names only, so a RegExp pattern is matched against
@@ -277,7 +305,38 @@ export class ServerPlatformaticKafka extends Server<never, KafkaStatus> {
       }
       this.logger.error(err);
       this._status$.next(KafkaStatus.CRASHED);
+      this.stream = null;
+      this.scheduleRestart();
     }
+  }
+
+  // The library destroys the stream once a fetch has used up its retries, as
+  // during a broker restart, and does not consume again by itself.
+  protected scheduleRestart() {
+    const consumer = this.consumer;
+    if (!consumer) {
+      return;
+    }
+    const delay = Math.min(
+      PLATFORMATIC_KAFKA_RESTART_DELAY * 2 ** this.restartAttempts++,
+      PLATFORMATIC_KAFKA_MAX_RESTART_DELAY,
+    );
+    this.restartTimer = setTimeout(async () => {
+      this.restartTimer = null;
+      if (this.consumer !== consumer) {
+        return;
+      }
+      try {
+        await this.bindEvents(consumer);
+        this.restartAttempts = 0;
+      } catch (err) {
+        if (this.consumer !== consumer) {
+          return;
+        }
+        this.logger.error(err);
+        this.scheduleRestart();
+      }
+    }, delay);
   }
 
   public getHandlerByPattern(pattern: string): MessageHandler | null {

@@ -194,6 +194,7 @@ export interface ClientEvents {
 export interface ConsumerEvents extends ClientEvents {
   'consumer:group:join': (payload: ConsumerGroupJoinPayload) => void;
   'consumer:group:rebalance': () => void;
+  error: (error: Error) => void;
 }
 
 export interface MessagesStream extends AsyncIterable<Message> {
